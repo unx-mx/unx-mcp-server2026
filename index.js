@@ -148,10 +148,23 @@ app.post('/mcp', async (req, res) => {
 
       // Lógica de Tool 2
       if (toolName === "consultar_info_y_precios_curso") {
-        const { data: cursoData } = await supabase.from('catalogo_cursos').select('*')
+        console.log("-----------------------------------------");
+        console.log(`🔍 EL BOT SOLICITÓ BUSCAR:`);
+        console.log(`- Curso: ${args.nombre_curso}`);
+        console.log(`- Modalidad: ${args.modalidad}`);
+        console.log(`- Calendario: ${args.calendario}`);
+        
+        const { data: cursoData, error } = await supabase.from('catalogo_cursos').select('*')
           .ilike('nombre_curso', `%${args.nombre_curso}%`)
           .ilike('modalidad', `%${args.modalidad}%`)
           .ilike('calendario', `%${args.calendario}%`).limit(1);
+
+        if (error) {
+          console.error("❌ ERROR DE SUPABASE:", error.message);
+        }
+
+        console.log(`📦 RESPUESTA DE LA BASE DE DATOS:`, cursoData);
+        console.log("-----------------------------------------");
 
         if (cursoData && cursoData.length > 0) {
           const c = cursoData[0];
