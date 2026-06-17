@@ -1,207 +1,319 @@
-import express from 'express';
-import dotenv from 'dotenv';
-import { createClient } from '@supabase/supabase-js';
+import express from "express";
+import cors from "cors";
+import dotenv from "dotenv";
+import { Server } from "@modelcontextprotocol/sdk/server/index.js";
+import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
+import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
+import { createClient } from "@supabase/supabase-js";
 
 dotenv.config();
 
-// Proteger inicialización para evitar crasheos en Railway
-const supabaseUrl = process.env.SUPABASE_URL || 'https://dummy.supabase.co';
-const supabaseKey = process.env.SUPABASE_ANON_KEY || 'dummy';
+const app = express();
+app.use(cors());
+
+// Inicialización del cliente Supabase
+const supabaseUrl = process.env.SUPABASE_URL;
+const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY; // Se recomienda Service Role para lecturas seguras sin RLS restrictivo
 const supabase = createClient(supabaseUrl, supabaseKey);
 
-const app = express();
-const PORT = process.env.PORT || 3000;
-
-// Middleware para procesar JSON
-app.use(express.json());
-
-// Headers de seguridad que le gustan a CBB (Los que me pasaste)
-app.use((req, res, next) => {
-  res.header("Access-Control-Allow-Origin", "*");
-  res.header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-  res.header("Access-Control-Allow-Headers", "authorization, content-type");
-  res.header("X-Frame-Options", "DENY");
-  res.header("X-Content-Type-Options", "nosniff");
-  res.header("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
-  
-  // Responder inmediatamente a peticiones de pre-vuelo (CORS)
-  if (req.method === 'OPTIONS') {
-    return res.status(200).end();
+// Inicialización del servidor MCP
+const server = new Server(
+  {
+    name: "unx-mcp-server",
+    version: "1.0.0",
+  },
+  {
+    capabilities: {
+      tools: {},
+    },
   }
-  next();
+);
+
+// Registro de Herramientas (Tools) expuestas al agente IA
+server.setRequestHandler(ListToolsRequestSchema, async () => {
+  return {
+    tools: [
+      {
+        name: "obtener_catalogo_cursos",
+        description: "Obtiene una lista resumida de los cursos disponibles para el calendario activo.",
+        inputSchema: {
+          type: "object",
+          properties: {},
+        },
+      },
+      {
+        name: "obtener_detalle_curso",
+        description: "Recupera la descripción, beneficios, modalidades y precios de un curso específico (ej: integral, exponencial, radical, absoluto, '50 temas').",
+        inputSchema: {
+          type: "object",
+          properties: {
+            curso: {
+              type: "string",
+              description: "El identificador o nombre del curso a consultar.",
+            },
+          },
+          required: ["curso"],
+        },
+      },
+      {
+        name: "recomendar_curso_por_carrera",
+        description: "Busca la carrera sugerida en la base de datos y entrega la recomendación de curso con sus precios e inscripciones integradas en un solo paso.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            carrera: {
+              type: "string",
+              description: "Nombre de la carrera a la que aspira el estudiante (ej: Medicina, Arquitectura).",
+            },
+          },
+          required: ["carrera"],
+        },
+      },
+      {
+        name: "obtener_info_membresias",
+        description: "Obtiene información detallada sobre las membresías autogestivas UNX+.",
+        inputSchema: {
+          type: "object",
+          properties: {},
+        },
+      },
+      {
+        name: "obtener_politica_o_faq",
+        description: "Obtiene políticas de UNX como la de ex-alumnos, métodos de pago, inscripciones, etc.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            tema: {
+              type: "string",
+              description: "El tema a buscar (ej: 'exalumno', 'pagos', 'horarios').",
+            },
+          },
+          required: ["tema"],
+        },
+      },
+      {
+        name: "obtener_respuesta_emocional",
+        description: "Recupera una respuesta empática basada en el dictamen del alumno (admitido, no admitido, etc.).",
+        inputSchema: {
+          type: "object",
+          properties: {
+            estado: {
+              type: "string",
+              description: "El resultado del dictamen (ej: 'admitido', 'no_admitido', 'no_reintentar', 'reintentar').",
+            },
+          },
+          required: ["estado"],
+        },
+      }
+    ],
+  };
 });
 
-// Ruta de salud
-app.get('/', (req, res) => {
-  res.send('Servidor MCP UNX Activo 🟢 (Modo Webhook CBB)');
-});
-
-// RUTA PRINCIPAL PARA CHATBOTBUILDER
-app.post('/mcp', async (req, res) => {
-  const { jsonrpc, id, method, params } = req.body;
-
-  console.log(`📨 Recibido método: ${method}`);
+// Lógica de ejecución de las Herramientas
+server.setRequestHandler(CallToolRequestSchema, async (request) => {
+  const { name, arguments: args } = request.params;
 
   try {
-    // 1. HANDSHAKE (Inicialización) - Sin Auth
-    if (method === "initialize") {
-      return res.json({
-        jsonrpc: "2.0",
-        id,
-        result: {
-          protocolVersion: "2024-11-05",
-          capabilities: { tools: { listChanged: false } },
-          serverInfo: { name: "unx_mcp_railway", version: "1.0.0" }
-        }
+    if (name === "obtener_catalogo_cursos") {
+      const { data, error } = await supabase
+        .from("cursos_paa")
+        .select("id, nombre_curso, duracion, fecha_inicio, fecha_fin, precio_promocion_presencial, precio_promocion_zoom");
+
+      if (error) throw error;
+
+      let listado = "Nuestros cursos disponibles para el Calendario PAA actual son:\n\n";
+      data.forEach(c => {
+        listado += `• ${c.nombre_curso} (${c.duracion}): Inicia el ${c.fecha_inicio}. Presencial: $${c.precio_promocion_presencial} | Zoom: $${c.precio_promocion_zoom}\n`;
       });
+
+      return { content: [{ type: "text", text: listado }] };
     }
 
-    // 2. Notificación de inicializado
-    if (method === "notifications/initialized") {
-      return res.status(200).end();
-    }
-
-    // 3. LISTAR HERRAMIENTAS - (Lo que CBB lee para aprender qué sabe hacer el bot)
-    if (method === "tools/list") {
-      return res.json({
-        jsonrpc: "2.0",
-        id,
-        result: {
-          tools:[
-            {
-              name: "obtener_ruta_y_curso_ideal",
-              description: "Usa esta herramienta cuando el alumno te diga a qué universidad y carrera va, para saber qué examen hace y qué curso PAA debes recomendarle.",
-              inputSchema: {
-                type: "object",
-                properties: {
-                  universidad: { type: "string", description: "Ej. UDG, BUAP, TEC" },
-                  carrera: { type: "string", description: "Ej. Medicina, Arquitectura, Abogado" }
-                },
-                required: ["universidad", "carrera"]
-              }
-            },
-            {
-              name: "consultar_info_y_precios_curso",
-              description: "Usa esta herramienta para obtener precios, fechas e info detallada de un curso en específico.",
-              inputSchema: {
-                type: "object",
-                properties: {
-                  nombre_curso: { type: "string", description: "Ej. Integral, Radical, Exponencial" },
-                  modalidad: { type: "string", description: "Ej. Presencial, Zoom, On-Demand" },
-                  calendario: { type: "string", description: "Ej. 26B o 27A" }
-                },
-                required: ["nombre_curso", "modalidad", "calendario"]
-              }
-            },
-            {
-              name: "evaluar_fechas_y_calendarios",
-              description: "Evalúa si al alumno le conviene el calendario 26B (Examen Mayo) o 27A (Examen Noviembre) basándose en su mes de examen.",
-              inputSchema: {
-                type: "object",
-                properties: {
-                  mes_examen: { type: "string", description: "Mes en que el alumno hará examen. Ej: Mayo, Noviembre" }
-                },
-                required: ["mes_examen"]
-              }
-            }
-          ]
-        }
-      });
-    }
-
-    // 4. EJECUTAR HERRAMIENTAS - ¡AQUÍ SÍ PEDIMOS PASSWORD!
-    if (method === "tools/call") {
-      // Verificación de seguridad
-      const authHeader = req.headers['authorization'] || "";
-      const expectedToken = `Bearer ${process.env.MCP_API_KEY}`;
+    if (name === "obtener_detalle_curso") {
+      const cursoQuery = args.curso.toLowerCase().trim();
       
-      // Si la clave no coincide o no existe, rechazamos
-      if (authHeader !== expectedToken) {
-        console.log("⛔ Error de Auth en tools/call");
-        return res.status(401).json({
-          jsonrpc: "2.0", id, error: { code: -32000, message: "Unauthorized: Token inválido o ausente." }
-        });
+      const { data, error } = await supabase
+        .from("cursos_paa")
+        .select("*")
+        .ilike("id", `%${cursoQuery}%`);
+
+      if (error) throw error;
+      if (!data || data.length === 0) {
+        return {
+          content: [{ type: "text", text: `No logré encontrar detalles específicos del curso "${args.curso}". Intente buscando por integral, exponencial, radical o absoluto.` }],
+        };
       }
 
-      const toolName = params.name;
-      const args = params.arguments;
-      console.log(`🔧 Ejecutando Tool: ${toolName}`);
+      const curso = data[0];
+      const details = `
+Curso: ${curso.nombre_curso}
+Duración: ${curso.duracion}
+Fechas: Inicia el ${curso.fecha_inicio} y finaliza el ${curso.fecha_fin}
+Exámenes de simulación: ${curso.examenes_simulacion}
 
-      // Lógica de Tool 1
-      if (toolName === "obtener_ruta_y_curso_ideal") {
-        const { data: univData } = await supabase.from('universidades').select('*').ilike('nombre_universidad', `%${args.universidad}%`).limit(1);
-        const { data: carrData } = await supabase.from('mapeo_carreras').select('*').ilike('carrera', `%${args.carrera}%`).limit(1);
-        
-        let respuesta = `Resultados del análisis:\n`;
-        if (univData && univData.length > 0) {
-          respuesta += `- Examen: ${univData[0].examen_que_aplica}\n- Meses examen: ${univData[0].mes_examen_principal} y ${univData[0].mes_examen_secundario || 'N/A'}\n`;
-        } else {
-          respuesta += `- Universidad no hallada. Asume PAA si aplica.\n`;
-        }
-        if (carrData && carrData.length > 0) {
-          respuesta += `- Curso recomendado para ${carrData[0].carrera}: ${carrData[0].curso_recomendado}\n`;
-        } else {
-          respuesta += `- Carrera exacta no hallada. Pregunta el área de estudio.\n`;
-        }
-        return res.json({ jsonrpc: "2.0", id, result: { content: [{ type: "text", text: respuesta }] } });
-      }
+Precios y Modalidades:
+- Modalidad Presencial:
+  * Lista: $${curso.precio_lista_presencial} mxn
+  * Promoción: $${curso.precio_promocion_presencial} mxn
+- Modalidad Zoom (En vivo):
+  * Lista: $${curso.precio_lista_zoom} mxn
+  * Promoción: $${curso.precio_promocion_zoom} mxn
 
-      // Lógica de Tool 2
-      if (toolName === "consultar_info_y_precios_curso") {
-        console.log("-----------------------------------------");
-        console.log(`🔍 EL BOT SOLICITÓ BUSCAR:`);
-        console.log(`- Curso: ${args.nombre_curso}`);
-        console.log(`- Modalidad: ${args.modalidad}`);
-        console.log(`- Calendario: ${args.calendario}`);
-        
-        const { data: cursoData, error } = await supabase.from('catalogo_cursos').select('*')
-          .ilike('nombre_curso', `%${args.nombre_curso}%`)
-          .ilike('modalidad', `%${args.modalidad}%`)
-          .ilike('calendario', `%${args.calendario}%`).limit(1);
+Apartado: Reserva y congela tu descuento con $${curso.apartado} mxn.
 
-        if (error) {
-          console.error("❌ ERROR DE SUPABASE:", error.message);
-        }
+Inclusiones del curso:
+${curso.detalles_inclusiones}
 
-        console.log(`📦 RESPUESTA DE LA BASE DE DATOS:`, cursoData);
-        console.log("-----------------------------------------");
+Link de compra: ${curso.link_compra}
+Formulario de inscripción: ${curso.link_inscripcion}
+      `.trim();
 
-        if (cursoData && cursoData.length > 0) {
-          const c = cursoData[0];
-          const info = `Info Curso:\nEstatus: ${c.estatus}\nFechas: ${c.fecha_inicio} a ${c.fecha_fin}\nHorarios: ${c.horarios}\nPrecio Lista: $${c.precio_lista}\nDescuento: $${c.precio_descuento} (Hasta ${c.vigencia_descuento})\nApartado: $${c.pago_apartado}\nLink: ${c.link_pago}\nIncluye:\n${c.descripcion_corta}`;
-          return res.json({ jsonrpc: "2.0", id, result: { content: [{ type: "text", text: info }] } });
-        }
-        return res.json({ jsonrpc: "2.0", id, result: { content:[{ type: "text", text: `No se encontró curso activo para: ${args.nombre_curso}, ${args.modalidad}, ${args.calendario}.` }] } });
-      }
-
-      // Lógica de Tool 3
-      if (toolName === "evaluar_fechas_y_calendarios") {
-        const mes = args.mes_examen.toLowerCase();
-        let recomendacion = "";
-        if (['mayo', 'abril', 'junio', 'julio'].includes(mes)) {
-          recomendacion = `Examen pronto. Recomendar calendario actual: 26B.`;
-        } else if (['noviembre', 'octubre', 'diciembre'].includes(mes)) {
-          recomendacion = `Examen lejano. Recomendar PREVENTA del calendario: 27A (50% de descuento).`;
-        } else {
-          recomendacion = `Fechas atípicas. Sugerir Membresía On-Demand a su propio ritmo.`;
-        }
-        return res.json({ jsonrpc: "2.0", id, result: { content:[{ type: "text", text: recomendacion }] } });
-      }
-
-      throw new Error("Herramienta no encontrada");
+      return { content: [{ type: "text", text: details }] };
     }
 
-    // Método desconocido
-    return res.status(404).json({ error: "Method not found" });
+    if (name === "recomendar_curso_por_carrera") {
+      const carreraQuery = args.carrera.toUpperCase().trim();
 
+      const { data: carreraData, error: carreraError } = await supabase
+        .from("recomendacion_carreras")
+        .select("*")
+        .ilike("carrera_nombre", `%${carreraQuery}%`);
+
+      if (carreraError) throw carreraError;
+
+      if (!carreraData || carreraData.length === 0) {
+        return {
+          content: [{
+            type: "text",
+            text: `No encontramos una sugerencia automatizada para la carrera "${args.carrera}". De forma general sugerimos el Curso Integral para carreras con un alto nivel de competencia (como Medicina u Odontología) o el Curso Exponencial/Radical para las demás. ¿Deseas que un asesor humano analice tu caso?`
+          }],
+        };
+      }
+
+      const cursoSugeridoId = carreraData[0].curso_recomiendo.toLowerCase().trim();
+
+      const { data: cursoData, error: cursoError } = await supabase
+        .from("cursos_paa")
+        .select("*")
+        .eq("id", cursoSugeridoId);
+
+      if (cursoError || !cursoData || cursoData.length === 0) {
+        return {
+          content: [{ type: "text", text: `Para la carrera ${carreraData[0].carrera_nombre} sugerimos el curso "${cursoSugeridoId.toUpperCase()}", pero los detalles no se encuentran disponibles temporalmente.` }],
+        };
+      }
+
+      const curso = cursoData[0];
+      const responseText = `
+¡Gracias por compartir esa información! Si tu meta es entrar a ${carreraData[0].carrera_nombre}, el curso ${curso.nombre_curso} que inicia el ${curso.fecha_inicio} es la mejor alternativa para ti 👌.
+
+Este programa está diseñado para aspirantes con este nivel de competencia y te dará el tiempo perfecto de preparación.
+
+Detalles de tu curso sugerido:
+- Duración: ${curso.duracion}
+- Presencial (López Cotilla 1794): $${curso.precio_promocion_presencial} mxn (Lista: $${curso.precio_lista_presencial} mxn)
+- Clases en vivo por Zoom: $${curso.precio_promocion_zoom} mxn (Lista: $${curso.precio_lista_zoom} mxn)
+- Apartado: Puedes congelar tu precio promocional apartando con $${curso.apartado} mxn.
+
+Inscríbete y aparta tu lugar aquí:
+👉 Enlace de pago: ${curso.link_compra}
+👉 Formulario de inscripción: ${curso.link_inscripcion}
+      `.trim();
+
+      return { content: [{ type: "text", text: responseText }] };
+    }
+
+    if (name === "obtener_info_membresias") {
+      const { data, error } = await supabase
+        .from("membresias")
+        .select("*")
+        .order("duracion_meses", { ascending: true });
+
+      if (error) throw error;
+
+      let responseText = "Contamos con nuestra MEMBRESÍA UNX+ para estudiar 'A tu propio ritmo'. Incluye 10 exámenes de simulación, explicaciones en video, manuales de estudio, regularizaciones y asesorías en vivo por Zoom:\n\n";
+      data.forEach(m => {
+        responseText += `• Membresía ${m.nombre_membresia} (${m.duracion_meses} meses): Pago único de $${m.precio_promocion} mxn (Lista: $${m.precio_lista} mxn)\n`;
+      });
+      responseText += "\n¿Te gustaría asegurar tu acceso a la plataforma o prefieres clases presenciales?";
+
+      return { content: [{ type: "text", text: responseText }] };
+    }
+
+    if (name === "obtener_politica_o_faq") {
+      const temaQuery = args.tema.toLowerCase().trim();
+
+      const { data, error } = await supabase
+        .from("faqs_y_politicas")
+        .select("*")
+        .ilike("id", `%${temaQuery}%`);
+
+      if (error) throw error;
+
+      if (!data || data.length === 0) {
+        return {
+          content: [{ type: "text", text: `No logré localizar información específica sobre el tema "${args.tema}". Por favor consúltalo con uno de nuestros asesores en sucursal.` }],
+        };
+      }
+
+      return { content: [{ type: "text", text: data[0].respuesta }] };
+    }
+
+    if (name === "obtener_respuesta_emocional") {
+      const estadoQuery = args.estado.toLowerCase().trim();
+
+      const { data, error } = await supabase
+        .from("respuestas_emocionales")
+        .select("*")
+        .eq("categoria", estadoQuery);
+
+      if (error) throw error;
+
+      if (!data || data.length === 0) {
+        return {
+          content: [{ type: "text", text: "¡Mucho éxito en tu proceso! En UNX estamos listos para apoyarte a alcanzar tus metas. 💙" }],
+        };
+      }
+
+      // Selector aleatorio de respuestas para dar naturalidad a la conversación
+      const randomIndex = Math.floor(Math.random() * data.length);
+      return { content: [{ type: "text", text: data[randomIndex].mensaje }] };
+    }
+
+    throw new Error(`Herramienta no localizada: ${name}`);
   } catch (error) {
-    console.error("Error servidor:", error);
-    return res.json({
-      jsonrpc: "2.0", id, error: { code: -32000, message: error.message }
-    });
+    return {
+      content: [{ type: "text", text: `Surgió una situación inesperada: ${error.message}` }],
+      isError: true,
+    };
   }
 });
 
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`🚀 Servidor MCP de UNX corriendo en puerto ${PORT}`);
+// Configuración del ruteo de Sesiones SSE para múltiples usuarios simultáneos en CBB
+const transports = new Map();
+
+app.get("/sse", async (req, res) => {
+  const transport = new SSEServerTransport("/messages", res);
+  transports.set(transport.sessionId, transport);
+  
+  res.on("close", () => {
+    transports.delete(transport.sessionId);
+  });
+  
+  await server.connect(transport);
+});
+
+app.post("/messages", express.json(), async (req, res) => {
+  const sessionId = req.query.sessionId;
+  const transport = transports.get(sessionId);
+  if (transport) {
+    await transport.handlePostMessage(req, res);
+  } else {
+    res.status(400).send("Sesión de transporte no localizada");
+  }
+});
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log(`Servidor MCP activo en puerto ${PORT}`);
 });
