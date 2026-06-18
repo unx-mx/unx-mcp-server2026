@@ -10,7 +10,7 @@ dotenv.config();
 
 const app = express();
 app.use(cors());
-app.use(express.json()); // <-- Súper importante: habilita la lectura de JSON de forma global
+app.use(express.json()); // Habilita la lectura de JSON globalmente
 
 // Inicialización del cliente Supabase
 const supabaseUrl = process.env.SUPABASE_URL;
@@ -18,24 +18,101 @@ const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABAS
 const supabase = createClient(supabaseUrl, supabaseKey);
 
 // ==========================================
-// 1. ENDPOINT CLÁSICO DE CBB (POST /mcp)
+// 1. ENDPOINT DE CBB (POST /mcp)
 // ==========================================
 app.post("/mcp", async (req, res) => {
   const body = req.body;
-  
+
+  // --- A. RESPUESTA AL DESCUBRIMIENTO DE HERRAMIENTAS (tools/list) ---
+  if (body.method === "tools/list") {
+    return res.json({
+      jsonrpc: "2.0",
+      result: {
+        tools: [
+          {
+            name: "obtener_catalogo_cursos",
+            description: "Obtiene una lista resumida de los cursos disponibles para el calendario activo.",
+            inputSchema: { type: "object", properties: {} }
+          },
+          {
+            name: "obtener_detalle_curso",
+            description: "Recupera la descripción, beneficios, modalidades y precios de un curso específico.",
+            inputSchema: {
+              type: "object",
+              properties: {
+                curso: { 
+                  type: "string", 
+                  description: "El identificador del curso a consultar (ej: 'integral', 'exponencial', 'radical', 'absoluto', '50mas_sem', '50mas_fines')." 
+                }
+              },
+              required: ["curso"]
+            }
+          },
+          {
+            name: "recomendar_curso_por_carrera",
+            description: "Busca la carrera en la base de datos y entrega la recomendación de curso con sus precios e inscripciones integradas en un solo paso.",
+            inputSchema: {
+              type: "object",
+              properties: {
+                carrera: { 
+                  type: "string", 
+                  description: "Nombre de la carrera a la que aspira el estudiante (ej: 'Medicina', 'Arquitectura')." 
+                }
+              },
+              required: ["carrera"]
+            }
+          },
+          {
+            name: "obtener_info_membresias",
+            description: "Obtiene información detallada sobre las membresías autogestivas UNX+.",
+            inputSchema: { type: "object", properties: {} }
+          },
+          {
+            name: "obtener_politica_o_faq",
+            description: "Obtiene políticas de UNX como la de ex-alumnos, métodos de pago, inasistencias, recolección de material o accesos de Kajabi.",
+            inputSchema: {
+              type: "object",
+              properties: {
+                tema: { 
+                  type: "string", 
+                  description: "El identificador del tema (ej: 'politica_exalumno', 'liquidacion', 'ubicacion', 'horarios_atencion', 'materia_ingles', 'piense', 'inasistencia_presencial', 'inasistencia_zoom', 'envio_material', 'plataforma_login')." 
+                }
+              },
+              required: ["tema"]
+            }
+          },
+          {
+            name: "obtener_respuesta_emocional",
+            description: "Recupera una respuesta empática basada en el dictamen del alumno.",
+            inputSchema: {
+              type: "object",
+              properties: {
+                estado: { 
+                  type: "string", 
+                  description: "El resultado del dictamen (ej: 'admitido', 'no_admitido', 'no_reintentar', 'reintentar')." 
+                }
+              },
+              required: ["estado"]
+            }
+          }
+        ]
+      },
+      id: body.id || 1
+    });
+  }
+
+  // --- B. EJECUCIÓN DE LAS HERRAMIENTAS (tools/call o CBB webhook) ---
   let toolName = "";
   let args = {};
   let isJsonRpc = false;
   let id = 1;
 
-  // Detectar formato: si viene estructurado como JSON-RPC de MCP
   if (body.jsonrpc === "2.0" || body.method === "tools/call") {
     isJsonRpc = true;
     id = body.id || 1;
     toolName = body.params?.name || "";
     args = body.params?.arguments || {};
   } else {
-    // Si CBB manda una petición simple o mapeo directo
     toolName = body.name || body.function || body.tool || "";
     args = body.arguments || body.args || body.params || {};
   }
@@ -49,7 +126,6 @@ app.post("/mcp", async (req, res) => {
   try {
     let resultText = "";
     
-    // Ejecución de la lógica según la herramienta solicitada
     if (toolName === "obtener_catalogo_cursos") {
       const { data, error } = await supabase
         .from("cursos_paa")
@@ -193,7 +269,6 @@ Inscríbete y aparta tu lugar aquí:
       throw new Error(`Herramienta no localizada: ${toolName}`);
     }
 
-    // Estructurar respuesta según formato recibido
     if (isJsonRpc) {
       return res.json({
         jsonrpc: "2.0",
@@ -207,7 +282,7 @@ Inscríbete y aparta tu lugar aquí:
         success: true,
         tool: toolName,
         text: resultText,
-        messages: [{ message: { text: resultText } }] // Formato compatible nativo con CBB
+        messages: [{ message: { text: resultText } }]
       });
     }
 
