@@ -23,10 +23,34 @@ const supabase = createClient(supabaseUrl, supabaseKey);
 app.post("/mcp", async (req, res) => {
   const body = req.body;
 
-  // --- A. RESPUESTA AL DESCUBRIMIENTO DE HERRAMIENTAS (tools/list) ---
+  // --- A. SOLICITUD DE INICIALIZACIÓN MCP (Paso 1 del Handshake) ---
+  if (body.method === "initialize") {
+    return res.json({
+      jsonrpc: "2.0",
+      id: body.id || 1,
+      result: {
+        protocolVersion: "2024-11-05",
+        capabilities: {
+          tools: {} // Indica que este servidor soporta ejecución de herramientas
+        },
+        serverInfo: {
+          name: "unx-mcp-server",
+          version: "1.0.0"
+        }
+      }
+    });
+  }
+
+  // --- B. NOTIFICACIÓN DE INICIALIZACIÓN COMPLETADA (Paso 2 del Handshake) ---
+  if (body.method === "notifications/initialized") {
+    return res.status(200).end(); // Las notificaciones no devuelven cuerpo en el protocolo
+  }
+
+  // --- C. DESCUBRIMIENTO DE HERRAMIENTAS (Paso 3 del Handshake) ---
   if (body.method === "tools/list") {
     return res.json({
       jsonrpc: "2.0",
+      id: body.id || 1,
       result: {
         tools: [
           {
@@ -50,7 +74,7 @@ app.post("/mcp", async (req, res) => {
           },
           {
             name: "recomendar_curso_por_carrera",
-            description: "Busca la carrera en la base de datos y entrega la recomendación de curso con sus precios e inscripciones integradas en un solo paso.",
+            description: "Busca la carrera en la base de datos y entrega la recomendación de curso con sus precios e inscripciones en un solo paso.",
             inputSchema: {
               type: "object",
               properties: {
@@ -96,12 +120,11 @@ app.post("/mcp", async (req, res) => {
             }
           }
         ]
-      },
-      id: body.id || 1
+      }
     });
   }
 
-  // --- B. EJECUCIÓN DE LAS HERRAMIENTAS (tools/call o CBB webhook) ---
+  // --- D. EJECUCIÓN DE LAS HERRAMIENTAS (tools/call o CBB webhook directo) ---
   let toolName = "";
   let args = {};
   let isJsonRpc = false;
